@@ -2,34 +2,19 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"html/template"
 	"image"
 	"image/gif"
 	"image/jpeg"
-	"io/ioutil"
 	"log"
 	"mime/multipart"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
-	"strings"
 
 	"github.com/nfnt/resize"
 )
-
-var tPath = "./temps/"
-var dPath = "./data/"
-
-var templateDirs = []string{"templates", "data"}
-var templates *template.Template
-
-func init() {
-	templates, _ = getTemplates()
-}
 
 type data struct {
 	Success Success `json:"success"`
@@ -50,44 +35,9 @@ func main() {
 	fmt.Println(port)
 
 	http.HandleFunc("/create", fileUploadHandler)
-	http.HandleFunc("/file", getFile)
-	http.HandleFunc("/upload", fileUploadHTML) //this is for the demo
-
-	http.HandleFunc("/", rootHandler)
-	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
-
+	
 	fmt.Println("Listening on :", port)
 	http.ListenAndServe(":"+port, nil)
-}
-
-func rootHandler(w http.ResponseWriter, r *http.Request) {
-
-	data := map[string]string{
-		"title":  "gif maker",
-		"header": "My Header",
-		"footer": "My Footer",
-	}
-
-	outputHTML(w, r, data)
-
-}
-
-func outputHTML(w http.ResponseWriter, r *http.Request, data map[string]string) {
-	fmt.Println("url", r.Host, r.URL.RequestURI())
-
-	if status == 201 {
-		data["status"] = "201"
-		data["url"] = "http://" + r.Host + "/file"
-	}
-	err := templates.ExecuteTemplate(w, "rootHTML", data)
-
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
-}
-
-func getFile(w http.ResponseWriter, r *http.Request) {
-	http.ServeFile(w, r, "output.gif")
 }
 
 //fileUploadHandler uploads nultiple files from formdata
@@ -108,9 +58,9 @@ func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	d := formdata.Value
-	w.Header().Set("Content-Type", "application/json")
-
+	
 	if len(d["delay"]) < 1 || len(files) < 1 {
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(400)
 		w.Write([]byte(`{"error": "Delay field or files are required in formdata"}`))
 		return
@@ -124,73 +74,28 @@ func fileUploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	//send file names and delay
-	err = createGif(files, di)
+	w.Header().Set("Content-Type", "image/gif")
+	w.WriteHeader(200)
+	
+	err = createGif(files, di, w)
 
 	if err != nil {
 		w.Write([]byte(err.Error()))
 		return
 	}
 
-	dt := data{Success{Message: "Gif file created successfully"}, 201}
+	// dt := data{Success{Message: "Gif file created successfully"}, 201}
 
-	w.WriteHeader(201)
+	// err = json.NewEncoder(w).Encode(&dt)
 
-	err = json.NewEncoder(w).Encode(&dt)
-
-	if err != nil {
-		w.Write([]byte(err.Error()))
-	}
-
-}
-
-func fileUploadHTML(w http.ResponseWriter, r *http.Request) {
-
-	err := r.ParseMultipartForm(20000)
-
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	formdata := r.MultipartForm
-
-	var files []*multipart.FileHeader
-	for k, v := range formdata.File {
-		fmt.Println(k, v)
-		files = v
-	}
-
-	d := formdata.Value
-	w.Header().Set("Content-Type", "application/json")
-
-	if len(d["delay"]) < 1 || len(files) < 1 {
-		w.WriteHeader(400)
-		w.Write([]byte(`{"error": "Delay field or files are required in formdata"}`))
-		return
-	}
-
-	di, err := strconv.Atoi(d["delay"][0])
-
-	if err != nil {
-		w.Write([]byte(err.Error()))
-		return
-	}
-
-	//send file names and delay
-	err = createGif(files, di)
-
-	if err != nil {
-		w.Write([]byte(err.Error()))
-		return
-	}
-
-	status = 201
-
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	// if err != nil {
+	// 	w.Write([]byte(err.Error()))
+	// }
 
 }
 
 //
-func createGif(files []*multipart.FileHeader, delay int) error {
+func createGif(files []*multipart.FileHeader, delay int, w http.ResponseWriter) error {
 
 	var frames []*image.Paletted
 	var dx = []int{}
@@ -276,13 +181,7 @@ func createGif(files []*multipart.FileHeader, delay int) error {
 		delays[j] = delay
 	}
 
-	opfile, err := os.Create("output.gif")
-
-	if err != nil {
-		return errors.New("Failed ceating .gif file on disk: " + err.Error())
-	}
-
-	err = gif.EncodeAll(opfile, &gif.GIF{Image: frames, Delay: delays, LoopCount: 0})
+	err := gif.EncodeAll(w, &gif.GIF{Image: frames, Delay: delays, LoopCount: 0})
 
 	if err != nil {
 		return errors.New("Failed gif encoding: " + err.Error())
@@ -290,21 +189,4 @@ func createGif(files []*multipart.FileHeader, delay int) error {
 
 	return nil
 
-}
-
-func getTemplates() (templates *template.Template, err error) {
-	var allFiles []string
-	for _, dir := range templateDirs {
-		files2, _ := ioutil.ReadDir(dir)
-		for _, file := range files2 {
-			filename := file.Name()
-			if strings.HasSuffix(filename, ".html") {
-				filePath := filepath.Join(dir, filename)
-				allFiles = append(allFiles, filePath)
-			}
-		}
-	}
-
-	templates, err = template.New("").ParseFiles(allFiles...)
-	return
 }
